@@ -17,7 +17,7 @@ type HeadlessBrowser struct {
 	Quiet bool
 }
 
-// NewHeadlessBrowser connets to a headless browser at remote.
+// NewHeadlessBrowser connects to a headless browser at remote.
 // If quiet is true, debug output is suppressed.
 func NewHeadlessBrowser(remote string, quiet bool) (*HeadlessBrowser, error) {
 	ii, err := GetInstanceInfo(remote)
