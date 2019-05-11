@@ -6,20 +6,22 @@ Extract URLs from websites using a headless browser
 This project uses a headless chromium instance for navigating websites.
 
 ```bash
-docker run -it --name headless-chromium --rm -p 127.0.0.1:9222:9222 --entrypoint "chromium-browser" zenika/alpine-chrome --headless --disable-gpu --no-sandbox --disable-software-rasterizer --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --enable-logging --disable-dev-shm-usage --disable-sync --disable-background-networking --no-first-run --no-pings --metrics-recording-only --safebrowsing-disable-auto-update --mute-audio
+docker run -it --name headless-chromium --rm -p 127.0.0.1:9222:9222 --entrypoint "chromium-browser" zenika/alpine-chrome --headless --disable-gpu --no-sandbox --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --enable-logging --autoplay-policy=no-user-gesture-required --disable-software-rasterizer --disable-dev-shm-usage --disable-sync --disable-background-networking --no-first-run --no-pings --metrics-recording-only --safebrowsing-disable-auto-update --mute-audio
 
 ```
 
 Some of the switches might be deprecated or entirely useless. Sources are
 - https://github.com/GoogleChrome/puppeteer/issues/940#issuecomment-336423912
 - https://peter.sh/experiments/chromium-command-line-switches/
+- https://github.com/obsproject/obs-browser/issues/105
+
 
 ## Running
 
-Once the docker container is running, and navigating to `127.0.0.1:9222` works in your local browser, we can try navigating to a website using the headless instance. By default we are trying to extract `.m3u8` files from our target (see `main.go`).
+Once the docker container is running, and navigating to `127.0.0.1:9222` works in your local browser, we can try navigating to a website using the headless instance. By default we are trying to extract media files from our target (see `main.go`).
 
 ```bash
-go build && ./url-extract -url https://castr.io/hlsplayer
+go build && ./url-extract -url https://castr.io/hlsplayer -quiet -heuristics
 ```
 
 The result should look something like `https://cstr-x.castr.io/castr/live_x/index.m3u8`.
@@ -36,6 +38,12 @@ Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/a
 Accept-Encoding: gzip, deflate, br
 ```
 
-## Limitations
+## Limitations & Heuristics
 
-This will only find URLs (in particular `m3u8` ones) that will be loaded without any user interaction. Media that is only played e.g. on-click will not be found.
+This approach will only find URLs (in particular `m3u8` ones) that will be loaded without any user interaction. Media that is only played e.g. on-click will not (generally) be found.
+
+The autoplay-policy `no-user-gesture-required` allows some sites to auto play media without user-interaction.
+
+Furthermore, we try to click elements with ids and classes that "look like" media players to start playing media that will not auto play. Check `headless_browser.go` for more information.
+
+These heuristics are currently limited by sites that embed media players inside iframes.

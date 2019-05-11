@@ -9,14 +9,16 @@ import (
 )
 
 var (
-	targetURL string
-	remote    string
-	quiet     bool
+	targetURL  string
+	remote     string
+	heuristics bool
+	quiet      bool
 )
 
 func init() {
 	flag.StringVar(&targetURL, "url", "", "the URL to analyze")
 	flag.StringVar(&remote, "remote", "localhost:9222", "the endpoint of the headless instance")
+	flag.BoolVar(&heuristics, "heuristics", false, "use heuristics to find media elements")
 	flag.BoolVar(&quiet, "quiet", false, "discard debug output")
 	flag.Parse()
 }
@@ -27,22 +29,22 @@ func main() {
 		log.Fatalf("Please provide a URL with '-url'.")
 	}
 
-	hb, err := NewHeadlessBrowser(remote, quiet)
+	hb, err := NewHeadlessBrowser(remote, heuristics, quiet)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Printf("Success! Found instace %q with User-Agent %q. Using debuggerURL %q.",
+	log.Printf("Found instace %q with User-Agent %q. Using debuggerURL %q.",
 		hb.Info.Browser,
 		hb.Info.UserAgent,
 		hb.Info.WebSocketDebuggerURL,
 	)
 
 	matcherFunc := func(url *url.URL) bool {
-		return strings.HasSuffix(url.Path, ".m3u8")
+		return strings.HasSuffix(url.Path, ".m3u8") || strings.HasSuffix(url.Path, ".mp4")
 	}
 
-	result, err := hb.ExtractURL(targetURL, time.Second*5, matcherFunc)
+	result, err := hb.ExtractURL(targetURL, time.Second*10, matcherFunc)
 	if err != nil {
 		log.Fatal(err)
 	}
