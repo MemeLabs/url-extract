@@ -21,14 +21,14 @@ Some of the switches might be deprecated or entirely useless. Sources are
 Once the docker container is running, and navigating to `127.0.0.1:9222` works in your local browser, we can try navigating to a website using the headless instance. By default we are trying to extract media files from our target (see `main.go`).
 
 ```bash
-go build && ./url-extract -url https://castr.io/hlsplayer -quiet -heuristics
+go build && ./url-extract -quiet -heuristics -url https://castr.io/hlsplayer
 ```
 
 The result should look something like `https://cstr-x.castr.io/castr/live_x/index.m3u8`.
 
 ### Detection
 
-The request headers when accessing a website (at the time of writing) is
+The request headers when accessing a website (at the time of writing) are
 
 ```
 Connection: keep-alive
@@ -38,12 +38,14 @@ Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/a
 Accept-Encoding: gzip, deflate, br
 ```
 
-## Limitations & Heuristics
+## Limitations
 
-This approach will only find URLs (in particular `m3u8` ones) that will be loaded without any user interaction. Media that is only played e.g. on-click will not (generally) be found.
+Generally, only URLs that are automatically loaded via the network are found. URLs that are only loaded after user interaction, e.g. on-click will not be found. The autoplay-policy `no-user-gesture-required` allows websites to play some media files without user-interaction.
 
-The autoplay-policy `no-user-gesture-required` allows some sites to auto play media without user-interaction.
+### Heuristics
 
-Furthermore, we try to click elements with ids and classes that "look like" media players to start playing media that will not auto play. Check `headless_browser.go` for more information.
+We try to click elements with ids and classes that "look like" media players to start playing media that will not auto play. Check `heuristics.go` for more information. This is always open to improvement or adjustment. Note that using such heuristics can lead to false-negatives by interacting with the website in a way that stops loading a resource that should normally be found.
 
-These heuristics are currently limited by sites that embed media players inside iframes.
+### Todo
+
+Heuristics are not able to access sites that embed e.g. media players inside iframes. Properly accessing iframes seems to be an open issue in the `chromedp` project.

@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
 type HeadlessBrowser struct {
 	Info          *InstanceInfo
+	stopChan      chan bool
 	UseHeuristics bool
 	Quiet         bool
 }
@@ -27,21 +27,26 @@ func NewHeadlessBrowser(remote string, useHeuristics bool, quiet bool) (*Headles
 	if err != nil {
 		return nil, fmt.Errorf("Unable to connect to instance: %q", err)
 	}
+
+	log.Printf("Found instace %q with User-Agent %q. Using debuggerURL %q.",
+		ii.Browser,
+		ii.UserAgent,
+		ii.WebSocketDebuggerURL,
+	)
+
 	return &HeadlessBrowser{
 		Info:          ii,
+		stopChan:      make(chan bool, 1),
 		UseHeuristics: useHeuristics,
 		Quiet:         quiet,
 	}, nil
 }
 
 // ExtractURL visits the given targetURL until it finds a new url that is accepted by matcherFunc or timeout expires.
-func (hb *HeadlessBrowser) ExtractURL(targetURL string, timeout time.Duration, matcherFunc func(url *url.URL) bool) (*url.URL, error) {
-	log.Printf("Extracting from %q", targetURL)
+func (hb *HeadlessBrowser) ExtractURL(targetURL string, timeout time.Duration, resultChan chan *network.Request, matcherFunc func(url *url.URL) bool) error {
+	log.Printf("extracting from %q", targetURL)
 
-	// Navigation stalls if the channel is blocked in the network event handler.
-	// Buffer as much as is needed...
-	matchChan := make(chan *url.URL, 100)
-	ticker := time.NewTicker(timeout)
+	timeoutTicker := time.NewTicker(timeout)
 
 	// source: https://github.com/chromedp/chromedp/blob/master/allocate_test.go
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), hb.Info.WebSocketDebuggerURL)
@@ -73,9 +78,9 @@ func (hb *HeadlessBrowser) ExtractURL(targetURL string, timeout time.Duration, m
 			if err != nil {
 				log.Printf("request %q error: %q", ev.Request.URL, err)
 			}
-			if matcherFunc(url) {
-				log.Printf("MATCH: %q", ev.Request.URL)
-				matchChan <- url
+			if ev.Request.URL != targetURL && matcherFunc(url) {
+				// Navigation stalls if channel is blocked...
+				go func() { resultChan <- ev.Request }()
 			}
 		}
 	})
@@ -84,74 +89,60 @@ func (hb *HeadlessBrowser) ExtractURL(targetURL string, timeout time.Duration, m
 		network.Enable(),             // enable network events
 		chromedp.Navigate(targetURL), // navigate to url
 	); err != nil {
-		return nil, err
+		return err
 	}
 
-	// TODO: respect timeout...
-	waitToFinishLoading(ctx)
-	log.Println("finished loading!")
+	log.Println("waiting for page to finish loading...")
+	err := waitToFinishLoading(ctx, timeoutTicker)
+	if err != nil {
+		return err
+	}
 
 	if hb.UseHeuristics {
-		// HEURISTICS:
-		// Click everything that "looks like" a play button to catch media that does not auto-play.
-		// Clicking seems to block until any element is found by the given selector.
-		// Since we cannot guarantee this to happen, use routines...
-		findstr := "play"
-		for _, sel := range []string{
-			fmt.Sprintf("[class*='%s']", findstr),
-			fmt.Sprintf("[id*='%s']", findstr),
-		} {
-			go func(sel string) {
-				clickAllNodesBySelector(ctx, sel)
-				log.Printf("done clicking by %q", sel)
-			}(sel)
-		}
+		clickAll(ctx)
 	}
 
-	log.Println("navigation done")
+	log.Printf("waiting to find matching urls...")
 
-	for {
-		select {
-		case m := <-matchChan:
-			return m, nil
-		case <-ticker.C:
-			chromedp.Run(ctx,
-				chromedp.Stop(),
-			)
-			return nil, errors.New("timeout")
-		}
+	select {
+	case <-timeoutTicker.C:
+		chromedp.Run(ctx,
+			chromedp.Stop(),
+		)
+		return errors.New("timeout")
+	case <-hb.stopChan:
+		chromedp.Run(ctx,
+			chromedp.Stop(),
+		)
+		log.Println("stopped!")
+		return nil
 	}
 }
 
-func clickAllNodesBySelector(ctx context.Context, selector string) {
-
-	var nodes []*cdp.Node
-	if err := chromedp.Run(ctx, chromedp.Nodes(selector, &nodes)); err != nil {
-		log.Printf("error getting nodes: %q", err)
-		return
-	}
-	log.Printf("heuristics: found %d nodes for %q", len(nodes), selector)
-	for _, n := range nodes {
-		// log.Println("clicking", n.NodeName, n.Attributes)
-		if err := chromedp.Run(ctx, chromedp.MouseClickNode(n)); err != nil {
-			log.Printf("error clicking node: %q", err)
-		}
-	}
+// Stop trys to abort ExtractURL and shuts down the headless browser instance.
+func (hb *HeadlessBrowser) Stop() {
+	hb.stopChan <- true
 }
 
 // waitToFinishLoading waits for site to finish loading (since clicking buttons mights not work correctly otherwise)
 // source: https://github.com/chromedp/chromedp/issues/252
-func waitToFinishLoading(ctx context.Context) {
+// Only returns with an error on timeout.
+func waitToFinishLoading(ctx context.Context, timeoutTicker *time.Ticker) error {
 	state := "notloaded"
 	script := `document.readyState`
+	checkTicker := time.NewTicker(time.Millisecond * 100)
 	for {
-		err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, &state))
-		if err != nil {
-			log.Println(err)
+		select {
+		case <-checkTicker.C:
+			err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(script, &state))
+			if err != nil {
+				log.Printf("error in eval: %q", err)
+			}
+			if strings.Compare(state, "complete") == 0 {
+				return nil
+			}
+		case <-timeoutTicker.C:
+			return errors.New("timeout while waiting to finish loading")
 		}
-		if strings.Compare(state, "complete") == 0 {
-			break
-		}
-		time.Sleep(time.Millisecond * 100)
 	}
 }
